@@ -1,0 +1,53 @@
+{
+  "title": "Houzz Products Scraper",
+  "description": "Extract product data from Houzz. Provide a search query or custom Houzz search URLs. The scraper handles pagination and optionally fetches full product details.",
+  "type": "object",
+  "schemaVersion": 1,
+  "properties": {
+    "query": {
+      "title": "🔍 Search Query",
+      "type": "string",
+      "description": "Product to search for on Houzz (e.g., 'sofa', 'dining table', 'outdoor furniture').",
+      "editor": "textfield",
+      "prefill": "sofa",
+      "example": "modern sectional sofa"
+    },
+    "collectDetails": {
+      "title": "📄 Collect Full Product Details",
+      "type": "boolean",
+      "description": "If enabled, the scraper visits each product detail page to extract full descriptions and specifications.",
+      "editor": "checkbox",
+      "default": true
+    },
+    "results_wanted": {
+      "title": "📊 Maximum Products",
+      "type": "integer",
+      "description": "Maximum number of products to collect. Leave empty or set to a high number to collect all available products.",
+      "minimum": 1,
+      "default": 20,
+      "editor": "number"
+    },
+    "max_pages": {
+      "title": "📑 Maximum Pages",
+      "type": "integer",
+      "description": "Safety limit on the number of search result pages to visit.",
+      "minimum": 1,
+      "editor": "number",
+      "default": 20
+    },
+    "proxyConfiguration": {
+      "title": "🌐 Proxy Configuration",
+      "type": "object",
+      "description": "Use Apify Proxy to avoid blocking. Residential proxies are recommended for best results.",
+      "editor": "proxy",
+      "default": {
+        "useApifyProxy": true,
+        "apifyProxyGroups": [
+          "RESIDENTIAL"
+        ]
+      }
+    }
+  },
+  "required": [],
+  "additionalProperties": false
+}
