@@ -1,6 +1,6 @@
 {
   "title": "Houzz Products Scraper",
-  "description": "Extract product data from Houzz. Provide a search query or custom Houzz search URLs. The scraper handles pagination and optionally fetches full product details.",
+  "description": "Fast Houzz product scraper using Constructor.io API. Extracts titles, prices, ratings, reviews, images, and more.",
   "type": "object",
   "schemaVersion": 1,
   "properties": {
@@ -11,13 +11,6 @@
       "editor": "textfield",
       "prefill": "sofa",
       "example": "modern sectional sofa"
-    },
-    "collectDetails": {
-      "title": "📄 Collect Full Product Details",
-      "type": "boolean",
-      "description": "If enabled, the scraper visits each product detail page to extract full descriptions and specifications.",
-      "editor": "checkbox",
-      "default": true
     },
     "results_wanted": {
       "title": "📊 Maximum Products",

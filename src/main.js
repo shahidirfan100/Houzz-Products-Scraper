@@ -1,4 +1,4 @@
-// Houzz Products Scraper - Constructor.io API implementation
+// Houzz Products Scraper - Constructor.io API implementation (FAST)
 import { Actor, log } from 'apify';
 import { gotScraping } from 'got-scraping';
 
@@ -15,13 +15,12 @@ async function main() {
             query = 'sofa',
             results_wanted: RESULTS_WANTED_RAW = 20,
             max_pages: MAX_PAGES_RAW = 20,
-            collectDetails = true,
             proxyConfiguration,
         } = input;
 
         const RESULTS_WANTED = Number.isFinite(+RESULTS_WANTED_RAW) ? Math.max(1, +RESULTS_WANTED_RAW) : 100;
         const MAX_PAGES = Number.isFinite(+MAX_PAGES_RAW) ? Math.max(1, +MAX_PAGES_RAW) : 20;
-        const RESULTS_PER_PAGE = 24;
+        const RESULTS_PER_PAGE = 50; // Increased for faster fetching
 
         const proxyConf = proxyConfiguration ? await Actor.createProxyConfiguration({ ...proxyConfiguration }) : undefined;
 
@@ -78,56 +77,23 @@ async function main() {
             return response.body;
         }
 
-        async function fetchProductDetails(productUrl) {
+        function cleanImageUrl(imageUrl) {
+            if (!imageUrl) return null;
+            // Ensure URL starts with https
+            let url = imageUrl.startsWith('//') ? `https:${imageUrl}` : imageUrl;
+            if (!url.startsWith('http')) url = `https:${url}`;
+
+            // Remove query parameters to get clean .jpg URL
             try {
-                const options = {
-                    url: productUrl,
-                    responseType: 'text',
-                    headers: {
-                        'Accept': 'text/html,application/xhtml+xml',
-                        'Accept-Language': 'en-US,en;q=0.9',
-                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
-                    },
-                    timeout: { request: 30000 },
-                    retry: { limit: 2 },
-                };
-
-                if (proxyConf) {
-                    options.proxyUrl = await proxyConf.newUrl();
-                }
-
-                const response = await gotScraping(options);
-                const html = response.body;
-
-                // Extract description from meta tag or structured data
-                let description = null;
-                const metaDescMatch = html.match(/<meta\s+name="description"\s+content="([^"]+)"/i);
-                if (metaDescMatch) {
-                    description = metaDescMatch[1];
-                }
-
-                // Extract JSON-LD for more details
-                let specifications = null;
-                const jsonLdMatch = html.match(/<script\s+type="application\/ld\+json"[^>]*>([\s\S]*?)<\/script>/i);
-                if (jsonLdMatch) {
-                    try {
-                        const jsonLd = JSON.parse(jsonLdMatch[1]);
-                        if (jsonLd.description) {
-                            description = description || jsonLd.description;
-                        }
-                    } catch (e) { }
-                }
-
-                return { description, specifications };
-            } catch (err) {
-                log.warning(`Detail fetch failed for ${productUrl}: ${err.message}`);
-                return { description: null, specifications: null };
+                const parsed = new URL(url);
+                return `${parsed.origin}${parsed.pathname}`;
+            } catch {
+                return url.split('?')[0];
             }
         }
 
         function parseProduct(item) {
             const data = item.data || {};
-            const metadata = item.value_and_metadata_for_terms?.data || {};
 
             // Extract price
             let price = null;
@@ -135,44 +101,41 @@ async function main() {
             if (data.price !== undefined) {
                 price = `$${parseFloat(data.price).toFixed(2)}`;
             }
-            if (data.compare_at_price && data.compare_at_price > data.price) {
-                original_price = `$${parseFloat(data.compare_at_price).toFixed(2)}`;
+            if (data.compareAtPrice && parseFloat(data.compareAtPrice) > parseFloat(data.price)) {
+                original_price = `$${parseFloat(data.compareAtPrice).toFixed(2)}`;
             }
 
-            // Extract image URL
-            let image_url = data.image_url || null;
-            if (image_url && !image_url.startsWith('http')) {
-                image_url = `https:${image_url}`;
-            }
+            // Extract and clean image URL
+            const image_url = cleanImageUrl(data.image_url);
 
             // Build product URL
-            const handle = data.url || data.handle;
+            const handle = data.url;
             const url = handle ? `https://shophouzz.com${handle.startsWith('/') ? '' : '/'}${handle}` : null;
 
-            // Extract rating
-            let rating = null;
-            let review_count = null;
-            if (data.reviews_average) {
-                rating = parseFloat(data.reviews_average);
-            }
-            if (data.reviews_count) {
-                review_count = parseInt(data.reviews_count, 10);
-            }
+            // Extract rating and review count from API
+            const rating = data.rating ? parseFloat(data.rating) : null;
+            const review_count = data.rating_count ? parseInt(data.rating_count, 10) : null;
+
+            // Extract SKU (using barcode or id)
+            const sku = data.barcode || data.houzz_product_id || data.id || null;
+
+            // Extract product type and specifications
+            const product_type = data.style || null;
+            const specifications = data.materials || null;
 
             return {
-                title: item.value || data.title || null,
-                brand: data.vendor || data.manufacturer || null,
+                title: item.value || null,
+                brand: data.manufacturer || data.vendor || null,
                 price,
                 original_price,
                 image_url,
                 rating,
                 review_count,
-                description: data.description || null,
-                specifications: null,
+                description: null, // API doesn't provide full description
+                specifications,
                 url,
-                sku: data.sku || null,
-                product_type: data.product_type || null,
-                materials: data.materials || null,
+                sku,
+                product_type,
             };
         }
 
@@ -207,16 +170,6 @@ async function main() {
                     if (!product.url || seenUrls.has(product.url)) continue;
                     seenUrls.add(product.url);
 
-                    // Optionally fetch additional details
-                    if (collectDetails && product.url) {
-                        const details = await fetchProductDetails(product.url);
-                        product.description = details.description || product.description;
-                        product.specifications = details.specifications;
-
-                        // Add small delay to avoid overwhelming the server
-                        await new Promise(r => setTimeout(r, 200));
-                    }
-
                     batchBuffer.push(product);
                     saved++;
                     await pushBatch();
@@ -224,11 +177,6 @@ async function main() {
 
                 hasMorePages = currentPage < numPages;
                 currentPage++;
-
-                // Small delay between pages
-                if (hasMorePages && saved < RESULTS_WANTED) {
-                    await new Promise(r => setTimeout(r, 500));
-                }
             } catch (err) {
                 log.error(`❌ Error on page ${currentPage}: ${err.message}`);
                 currentPage++;

@@ -11,6 +11,8 @@
           "price",
           "rating",
           "review_count",
+          "sku",
+          "product_type",
           "url"
         ]
       },
