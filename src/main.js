@@ -1,9 +1,11 @@
-// Houzz Products Scraper - CheerioCrawler implementation
+// Houzz Products Scraper - Constructor.io API implementation
 import { Actor, log } from 'apify';
-import { CheerioCrawler, Dataset } from 'crawlee';
-import { load as cheerioLoad } from 'cheerio';
+import { gotScraping } from 'got-scraping';
 
-// Single-entrypoint main
+// Constructor.io API configuration
+const CONSTRUCTOR_API_KEY = 'key_V5Io4KQzrjzso85q';
+const CONSTRUCTOR_BASE_URL = 'https://ac.cnstrc.com';
+
 await Actor.init();
 
 async function main() {
@@ -17,265 +19,225 @@ async function main() {
             proxyConfiguration,
         } = input;
 
-        const RESULTS_WANTED = Number.isFinite(+RESULTS_WANTED_RAW) ? Math.max(1, +RESULTS_WANTED_RAW) : Number.MAX_SAFE_INTEGER;
-        const MAX_PAGES = Number.isFinite(+MAX_PAGES_RAW) ? Math.max(1, +MAX_PAGES_RAW) : 999;
-
-        const toAbs = (href, base = 'https://shophouzz.com') => {
-            try { return new URL(href, base).href; } catch { return null; }
-        };
-
-        const cleanText = (html) => {
-            if (!html) return '';
-            const $ = cheerioLoad(html);
-            $('script, style, noscript, iframe').remove();
-            return $.root().text().replace(/\s+/g, ' ').trim();
-        };
-
-        const extractPrice = (text) => {
-            if (!text) return null;
-            const match = text.match(/\$[\d,]+(?:\.\d{2})?/);
-            return match ? match[0] : null;
-        };
-
-        const buildStartUrl = (q, page = 1) => {
-            const u = new URL('https://shophouzz.com/search');
-            if (q) u.searchParams.set('q', String(q).trim());
-            if (page > 1) u.searchParams.set('page', String(page));
-            return u.href;
-        };
-
-        const searchQuery = query?.trim() || 'sofa';
-        const initial = [buildStartUrl(searchQuery, 1)];
+        const RESULTS_WANTED = Number.isFinite(+RESULTS_WANTED_RAW) ? Math.max(1, +RESULTS_WANTED_RAW) : 100;
+        const MAX_PAGES = Number.isFinite(+MAX_PAGES_RAW) ? Math.max(1, +MAX_PAGES_RAW) : 20;
+        const RESULTS_PER_PAGE = 24;
 
         const proxyConf = proxyConfiguration ? await Actor.createProxyConfiguration({ ...proxyConfiguration }) : undefined;
 
+        // Generate unique identifiers for API requests
+        const generateUUID = () => 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => {
+            const r = Math.random() * 16 | 0;
+            return (c === 'x' ? r : (r & 0x3 | 0x8)).toString(16);
+        });
+
+        const userId = generateUUID();
+        let sessionId = 1;
         let saved = 0;
-        const seenUrls = new Set();
         let batchBuffer = [];
+        const seenUrls = new Set();
 
         async function pushBatch(force = false) {
             if (batchBuffer.length >= 10 || (force && batchBuffer.length > 0)) {
-                await Dataset.pushData(batchBuffer);
+                await Actor.pushData(batchBuffer);
                 log.info(`✓ Pushed ${batchBuffer.length} products (Total: ${saved})`);
                 batchBuffer = [];
             }
         }
 
-        function extractProductFromCard($, card) {
-            const $card = $(card);
+        async function fetchSearchResults(searchQuery, page) {
+            const url = new URL(`${CONSTRUCTOR_BASE_URL}/search/${encodeURIComponent(searchQuery)}`);
+            url.searchParams.set('key', CONSTRUCTOR_API_KEY);
+            url.searchParams.set('i', userId);
+            url.searchParams.set('s', String(sessionId++));
+            url.searchParams.set('page', String(page));
+            url.searchParams.set('num_results_per_page', String(RESULTS_PER_PAGE));
+            url.searchParams.set('sort_by', 'relevance');
+            url.searchParams.set('sort_order', 'descending');
+            url.searchParams.set('c', 'ciojs-client-2.72.0');
 
-            // Extract title and URL from the hover:underline link
-            const titleLink = $card.find('a.hover\\:underline').first();
-            if (!titleLink.length) return null;
+            const options = {
+                url: url.href,
+                responseType: 'json',
+                headers: {
+                    'Accept': 'application/json',
+                    'Accept-Language': 'en-US,en;q=0.9',
+                    'Origin': 'https://shophouzz.com',
+                    'Referer': 'https://shophouzz.com/',
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+                },
+                timeout: { request: 30000 },
+                retry: { limit: 3 },
+            };
 
-            const title = titleLink.text().trim() || null;
-            const href = titleLink.attr('href');
-            if (!href) return null;
+            if (proxyConf) {
+                options.proxyUrl = await proxyConf.newUrl();
+            }
 
-            const url = toAbs(href);
-            if (!url || seenUrls.has(url)) return null;
-            seenUrls.add(url);
+            const response = await gotScraping(options);
+            return response.body;
+        }
 
-            // Extract brand (look for text starting with "by ")
-            let brand = null;
-            $card.find('div, p, span').each((_, el) => {
-                const text = $(el).text().trim();
-                if (text.startsWith('by ')) {
-                    brand = text.replace(/^by\s+/i, '').trim();
-                    return false;
+        async function fetchProductDetails(productUrl) {
+            try {
+                const options = {
+                    url: productUrl,
+                    responseType: 'text',
+                    headers: {
+                        'Accept': 'text/html,application/xhtml+xml',
+                        'Accept-Language': 'en-US,en;q=0.9',
+                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+                    },
+                    timeout: { request: 30000 },
+                    retry: { limit: 2 },
+                };
+
+                if (proxyConf) {
+                    options.proxyUrl = await proxyConf.newUrl();
                 }
-            });
 
-            // Extract price (look for elements containing $)
+                const response = await gotScraping(options);
+                const html = response.body;
+
+                // Extract description from meta tag or structured data
+                let description = null;
+                const metaDescMatch = html.match(/<meta\s+name="description"\s+content="([^"]+)"/i);
+                if (metaDescMatch) {
+                    description = metaDescMatch[1];
+                }
+
+                // Extract JSON-LD for more details
+                let specifications = null;
+                const jsonLdMatch = html.match(/<script\s+type="application\/ld\+json"[^>]*>([\s\S]*?)<\/script>/i);
+                if (jsonLdMatch) {
+                    try {
+                        const jsonLd = JSON.parse(jsonLdMatch[1]);
+                        if (jsonLd.description) {
+                            description = description || jsonLd.description;
+                        }
+                    } catch (e) { }
+                }
+
+                return { description, specifications };
+            } catch (err) {
+                log.warning(`Detail fetch failed for ${productUrl}: ${err.message}`);
+                return { description: null, specifications: null };
+            }
+        }
+
+        function parseProduct(item) {
+            const data = item.data || {};
+            const metadata = item.value_and_metadata_for_terms?.data || {};
+
+            // Extract price
             let price = null;
             let original_price = null;
-            $card.find('span, p, div').each((_, el) => {
-                const text = $(el).text().trim();
-                if (text.startsWith('$')) {
-                    if (!price) {
-                        price = text;
-                    } else if (!original_price) {
-                        original_price = text;
-                    }
-                }
-            });
+            if (data.price !== undefined) {
+                price = `$${parseFloat(data.price).toFixed(2)}`;
+            }
+            if (data.compare_at_price && data.compare_at_price > data.price) {
+                original_price = `$${parseFloat(data.compare_at_price).toFixed(2)}`;
+            }
 
-            // Extract image
-            const img = $card.find('img').first();
-            const image_url = img.attr('src') || img.attr('data-src') || null;
+            // Extract image URL
+            let image_url = data.image_url || null;
+            if (image_url && !image_url.startsWith('http')) {
+                image_url = `https:${image_url}`;
+            }
+
+            // Build product URL
+            const handle = data.url || data.handle;
+            const url = handle ? `https://shophouzz.com${handle.startsWith('/') ? '' : '/'}${handle}` : null;
+
+            // Extract rating
+            let rating = null;
+            let review_count = null;
+            if (data.reviews_average) {
+                rating = parseFloat(data.reviews_average);
+            }
+            if (data.reviews_count) {
+                review_count = parseInt(data.reviews_count, 10);
+            }
 
             return {
-                title,
-                brand,
+                title: item.value || data.title || null,
+                brand: data.vendor || data.manufacturer || null,
                 price,
                 original_price,
                 image_url,
-                url,
-                rating: null,
-                review_count: null,
-                description: null,
+                rating,
+                review_count,
+                description: data.description || null,
                 specifications: null,
+                url,
+                sku: data.sku || null,
+                product_type: data.product_type || null,
+                materials: data.materials || null,
             };
         }
 
-        function extractProductsFromPage($, baseUrl) {
-            const products = [];
-            // Use the correct selector for Houzz product cards
-            $('div[class*="md:p-"]').each((_, card) => {
-                const product = extractProductFromCard($, card);
-                if (product) products.push(product);
-            });
-            return products;
+        const searchQuery = query?.trim() || 'sofa';
+        log.info(`🔍 Starting search for: "${searchQuery}"`);
+        log.info(`📊 Target: ${RESULTS_WANTED} products, max ${MAX_PAGES} pages`);
+
+        let currentPage = 1;
+        let totalResults = 0;
+        let hasMorePages = true;
+
+        while (hasMorePages && saved < RESULTS_WANTED && currentPage <= MAX_PAGES) {
+            try {
+                log.info(`📄 Fetching page ${currentPage}...`);
+                const data = await fetchSearchResults(searchQuery, currentPage);
+
+                if (!data.response?.results || data.response.results.length === 0) {
+                    log.info(`📭 No more results on page ${currentPage}`);
+                    break;
+                }
+
+                const results = data.response.results;
+                totalResults = data.response.total_num_results || totalResults;
+                const numPages = Math.ceil(totalResults / RESULTS_PER_PAGE);
+
+                log.info(`📦 Page ${currentPage}/${numPages} → Found ${results.length} products (Total available: ${totalResults})`);
+
+                for (const item of results) {
+                    if (saved >= RESULTS_WANTED) break;
+
+                    const product = parseProduct(item);
+                    if (!product.url || seenUrls.has(product.url)) continue;
+                    seenUrls.add(product.url);
+
+                    // Optionally fetch additional details
+                    if (collectDetails && product.url) {
+                        const details = await fetchProductDetails(product.url);
+                        product.description = details.description || product.description;
+                        product.specifications = details.specifications;
+
+                        // Add small delay to avoid overwhelming the server
+                        await new Promise(r => setTimeout(r, 200));
+                    }
+
+                    batchBuffer.push(product);
+                    saved++;
+                    await pushBatch();
+                }
+
+                hasMorePages = currentPage < numPages;
+                currentPage++;
+
+                // Small delay between pages
+                if (hasMorePages && saved < RESULTS_WANTED) {
+                    await new Promise(r => setTimeout(r, 500));
+                }
+            } catch (err) {
+                log.error(`❌ Error on page ${currentPage}: ${err.message}`);
+                currentPage++;
+            }
         }
 
-        function extractDetailPageData($) {
-            const data = {};
+        await pushBatch(true);
+        log.info(`✅ Completed! Saved ${saved} products`);
 
-            // Title
-            data.title = $('h1').first().text().trim() || null;
-
-            // Brand
-            const brandLink = $('a.u-link, a[class*="brand"]').first();
-            data.brand = brandLink.text().trim() || null;
-            if (!data.brand) {
-                $('*').each((_, el) => {
-                    const text = $(el).text().trim();
-                    if (text.toLowerCase().startsWith('by ')) {
-                        data.brand = text.replace(/^by\s+/i, '').trim();
-                        return false;
-                    }
-                });
-            }
-
-            // Price
-            const priceElements = $('.product-price, [class*="price"]');
-            priceElements.each((_, el) => {
-                const text = $(el).text().trim();
-                if (text.includes('$')) {
-                    const prices = text.match(/\$[\d,]+(?:\.\d{2})?/g);
-                    if (prices && prices.length > 0) {
-                        data.price = prices[0];
-                        if (prices.length > 1) data.original_price = prices[1];
-                    }
-                    return false;
-                }
-            });
-
-            // Rating and reviews
-            const ratingEl = $('[class*="rating"], [class*="star"]').first();
-            if (ratingEl.length) {
-                const ratingText = ratingEl.text().trim();
-                const ratingMatch = ratingText.match(/(\d+(?:\.\d+)?)/);
-                if (ratingMatch) data.rating = parseFloat(ratingMatch[1]);
-            }
-
-            const reviewEl = $('[class*="review"]').first();
-            if (reviewEl.length) {
-                const reviewText = reviewEl.text().trim();
-                const reviewMatch = reviewText.match(/(\d+)/);
-                if (reviewMatch) data.review_count = parseInt(reviewMatch[1], 10);
-            }
-
-            // Description
-            const descEl = $('#product-description, .product-description, [class*="description"]').first();
-            if (descEl.length) {
-                data.description_html = descEl.html()?.trim() || null;
-                data.description = cleanText(data.description_html);
-            }
-
-            // Specifications
-            const specsEl = $('#specifications, .specifications, [class*="spec"]').first();
-            if (specsEl.length) {
-                data.specifications = cleanText(specsEl.html());
-            }
-
-            // Images
-            const images = [];
-            $('img[src*="product"], img[data-src*="product"]').each((_, img) => {
-                const src = $(img).attr('src') || $(img).attr('data-src');
-                if (src) images.push(src);
-            });
-            if (images.length > 0) data.image_url = images[0];
-
-            return data;
-        }
-
-        const crawler = new CheerioCrawler({
-            proxyConfiguration: proxyConf,
-            maxRequestRetries: 3,
-            useSessionPool: true,
-            maxConcurrency: 10,
-            requestHandlerTimeoutSecs: 90,
-            async requestHandler({ request, $, enqueueLinks, log: crawlerLog }) {
-                const label = request.userData?.label || 'LIST';
-                const pageNo = request.userData?.pageNo || 1;
-
-                if (label === 'LIST') {
-                    const products = extractProductsFromPage($, request.url);
-                    crawlerLog.info(`LIST page ${pageNo} → found ${products.length} products`);
-
-                    if (collectDetails) {
-                        const remaining = RESULTS_WANTED - saved;
-                        const toEnqueue = products.slice(0, Math.max(0, remaining));
-                        if (toEnqueue.length) {
-                            await enqueueLinks({
-                                urls: toEnqueue.map(p => p.url),
-                                userData: { label: 'DETAIL', product: toEnqueue }
-                            });
-                        }
-                    } else {
-                        const remaining = RESULTS_WANTED - saved;
-                        const toPush = products.slice(0, Math.max(0, remaining));
-                        if (toPush.length) {
-                            batchBuffer.push(...toPush);
-                            saved += toPush.length;
-                            await pushBatch();
-                        }
-                    }
-
-                    if (saved < RESULTS_WANTED && pageNo < MAX_PAGES) {
-                        const currentUrl = new URL(request.url);
-                        const nextPage = pageNo + 1;
-                        currentUrl.searchParams.set('page', String(nextPage));
-                        await enqueueLinks({
-                            urls: [currentUrl.href],
-                            userData: { label: 'LIST', pageNo: nextPage }
-                        });
-                    }
-                    return;
-                }
-
-                if (label === 'DETAIL') {
-                    if (saved >= RESULTS_WANTED) return;
-                    try {
-                        const detailData = extractDetailPageData($);
-
-                        const item = {
-                            title: detailData.title || null,
-                            brand: detailData.brand || null,
-                            price: detailData.price || null,
-                            original_price: detailData.original_price || null,
-                            image_url: detailData.image_url || null,
-                            rating: detailData.rating || null,
-                            review_count: detailData.review_count || null,
-                            description: detailData.description || null,
-                            specifications: detailData.specifications || null,
-                            url: request.url,
-                        };
-
-                        batchBuffer.push(item);
-                        saved++;
-                        await pushBatch();
-                    } catch (err) {
-                        crawlerLog.error(`DETAIL ${request.url} failed: ${err.message}`);
-                    }
-                }
-            }
-        });
-
-        await crawler.run(initial.map(u => ({ url: u, userData: { label: 'LIST', pageNo: 1 } })));
-        await pushBatch(true); // Push remaining items
-        log.info(`✅ Finished. Saved ${saved} products`);
     } finally {
         await Actor.exit();
     }
