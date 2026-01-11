@@ -61,41 +61,42 @@ async function main() {
             }
         }
 
-        function extractProductFromCard($, card, baseUrl) {
+        function extractProductFromCard($, card) {
             const $card = $(card);
-            const href = $card.attr('href');
-            if (!href || !href.startsWith('/products/')) return null;
 
-            const url = toAbs(href, baseUrl);
+            // Extract title and URL from the hover:underline link
+            const titleLink = $card.find('a.hover\\:underline').first();
+            if (!titleLink.length) return null;
+
+            const title = titleLink.text().trim() || null;
+            const href = titleLink.attr('href');
+            if (!href) return null;
+
+            const url = toAbs(href);
             if (!url || seenUrls.has(url)) return null;
             seenUrls.add(url);
 
-            // Extract title
-            const title = $card.find('h2, h3, .product-title, [class*="title"]').first().text().trim() ||
-                $card.text().split('\n')[0]?.trim() || null;
-
-            // Extract brand (usually contains "by " prefix)
+            // Extract brand (look for text starting with "by ")
             let brand = null;
-            $card.find('*').each((_, el) => {
+            $card.find('div, p, span').each((_, el) => {
                 const text = $(el).text().trim();
-                if (text.toLowerCase().startsWith('by ')) {
+                if (text.startsWith('by ')) {
                     brand = text.replace(/^by\s+/i, '').trim();
                     return false;
                 }
             });
 
-            // Extract price
+            // Extract price (look for elements containing $)
             let price = null;
             let original_price = null;
-            $card.find('*').each((_, el) => {
+            $card.find('span, p, div').each((_, el) => {
                 const text = $(el).text().trim();
-                if (text.includes('$')) {
-                    const prices = text.match(/\$[\d,]+(?:\.\d{2})?/g);
-                    if (prices && prices.length > 0) {
-                        price = prices[0];
-                        if (prices.length > 1) original_price = prices[1];
+                if (text.startsWith('$')) {
+                    if (!price) {
+                        price = text;
+                    } else if (!original_price) {
+                        original_price = text;
                     }
-                    return false;
                 }
             });
 
@@ -119,8 +120,9 @@ async function main() {
 
         function extractProductsFromPage($, baseUrl) {
             const products = [];
-            $('a[href^="/products/"]').each((_, card) => {
-                const product = extractProductFromCard($, card, baseUrl);
+            // Use the correct selector for Houzz product cards
+            $('div[class*="md:p-"]').each((_, card) => {
+                const product = extractProductFromCard($, card);
                 if (product) products.push(product);
             });
             return products;
