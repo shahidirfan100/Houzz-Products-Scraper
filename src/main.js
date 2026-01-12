@@ -108,32 +108,70 @@ async function main() {
         function parseProduct(item) {
             const data = item.data || {};
 
+            // Price - always present
             let price = null;
-            let original_price = null;
-            if (data.price !== undefined && data.price !== null) {
+            if (data.price != null) {
                 price = `$${parseFloat(data.price).toFixed(2)}`;
             }
-            if (data.compareAtPrice && parseFloat(data.compareAtPrice) > parseFloat(data.price || 0)) {
-                original_price = `$${parseFloat(data.compareAtPrice).toFixed(2)}`;
+
+            // Original price (compareAtPrice) - check if it's higher than current price
+            let original_price = null;
+            if (data.compareAtPrice != null && data.price != null) {
+                const comparePrice = parseFloat(data.compareAtPrice);
+                const currentPrice = parseFloat(data.price);
+                if (comparePrice > currentPrice) {
+                    original_price = `$${comparePrice.toFixed(2)}`;
+                }
             }
 
+            // Image URL - clean query params
             const image_url = cleanImageUrl(data.image_url);
+
+            // Product URL
             const handle = data.url;
             const url = handle ? `https://shophouzz.com${handle.startsWith('/') ? '' : '/'}${handle}` : null;
 
+            // Rating - direct access (may be 0, which is valid)
+            let rating = null;
+            if (data.rating != null && !isNaN(data.rating)) {
+                rating = parseFloat(data.rating);
+            }
+
+            // Review count - direct access
+            let review_count = null;
+            if (data.rating_count != null && !isNaN(data.rating_count)) {
+                review_count = parseInt(data.rating_count, 10);
+            }
+
+            // SKU - try multiple sources
+            const sku = data.barcode || data.houzz_product_id || data.id || null;
+
+            // Product type from style field
+            const product_type = data.style || null;
+
+            // Specifications from materials
+            const specifications = data.materials || null;
+
+            // Brand/Manufacturer
+            const brand = data.manufacturer || data.vendor || null;
+
+            // Check if on_sale flag is available
+            const on_sale = data.on_sale === true;
+
             return {
                 title: item.value || null,
-                brand: data.manufacturer || data.vendor || null,
+                brand,
                 price,
                 original_price,
+                on_sale,
                 image_url,
-                rating: data.rating !== undefined ? parseFloat(data.rating) : null,
-                review_count: data.rating_count !== undefined ? parseInt(data.rating_count, 10) : null,
-                description: null,
-                specifications: data.materials || null,
+                rating,
+                review_count,
+                description: null, // Not available in search API
+                specifications,
                 url,
-                sku: data.barcode || data.houzz_product_id || data.id || null,
-                product_type: data.style || null,
+                sku,
+                product_type,
             };
         }
 

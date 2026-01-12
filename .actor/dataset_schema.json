@@ -10,6 +10,7 @@
           "brand",
           "price",
           "original_price",
+          "on_sale",
           "rating",
           "review_count",
           "sku",
