@@ -1,4 +1,4 @@
-// Houzz Products Scraper - Constructor.io API implementation (FAST)
+// Houzz Products Scraper - Constructor.io API (FAST + STEALTHY)
 import { Actor, log } from 'apify';
 import { gotScraping } from 'got-scraping';
 
@@ -20,11 +20,14 @@ async function main() {
 
         const RESULTS_WANTED = Number.isFinite(+RESULTS_WANTED_RAW) ? Math.max(1, +RESULTS_WANTED_RAW) : 100;
         const MAX_PAGES = Number.isFinite(+MAX_PAGES_RAW) ? Math.max(1, +MAX_PAGES_RAW) : 20;
-        const RESULTS_PER_PAGE = 50; // Increased for faster fetching
+        const RESULTS_PER_PAGE = Math.min(100, RESULTS_WANTED);
 
-        const proxyConf = proxyConfiguration ? await Actor.createProxyConfiguration({ ...proxyConfiguration }) : undefined;
+        // Initialize proxy with fast datacenter settings
+        const proxyConf = proxyConfiguration
+            ? await Actor.createProxyConfiguration({ ...proxyConfiguration })
+            : await Actor.createProxyConfiguration({ useApifyProxy: true });
 
-        // Generate unique identifiers for API requests
+        // Generate unique identifiers
         const generateUUID = () => 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => {
             const r = Math.random() * 16 | 0;
             return (c === 'x' ? r : (r & 0x3 | 0x8)).toString(16);
@@ -44,7 +47,7 @@ async function main() {
             }
         }
 
-        async function fetchSearchResults(searchQuery, page) {
+        async function fetchSearchResults(searchQuery, page, retryCount = 0) {
             const url = new URL(`${CONSTRUCTOR_BASE_URL}/search/${encodeURIComponent(searchQuery)}`);
             url.searchParams.set('key', CONSTRUCTOR_API_KEY);
             url.searchParams.set('i', userId);
@@ -54,36 +57,46 @@ async function main() {
             url.searchParams.set('sort_by', 'relevance');
             url.searchParams.set('sort_order', 'descending');
             url.searchParams.set('c', 'ciojs-client-2.72.0');
+            url.searchParams.set('_dt', String(Date.now()));
 
-            const options = {
-                url: url.href,
-                responseType: 'json',
-                headers: {
-                    'Accept': 'application/json',
-                    'Accept-Language': 'en-US,en;q=0.9',
-                    'Origin': 'https://shophouzz.com',
-                    'Referer': 'https://shophouzz.com/',
-                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
-                },
-                timeout: { request: 30000 },
-                retry: { limit: 3 },
-            };
+            const proxyUrl = await proxyConf.newUrl();
 
-            if (proxyConf) {
-                options.proxyUrl = await proxyConf.newUrl();
+            try {
+                const response = await gotScraping({
+                    url: url.href,
+                    proxyUrl,
+                    responseType: 'json',
+                    timeout: { request: 15000 },
+                    retry: { limit: 0 },
+                    headers: {
+                        'Accept': 'application/json, text/plain, */*',
+                        'Accept-Language': 'en-US,en;q=0.9',
+                        'Accept-Encoding': 'gzip, deflate, br',
+                        'Origin': 'https://shophouzz.com',
+                        'Referer': 'https://shophouzz.com/',
+                        'Sec-Ch-Ua': '"Chromium";v="131", "Not_A Brand";v="24"',
+                        'Sec-Ch-Ua-Mobile': '?0',
+                        'Sec-Ch-Ua-Platform': '"Windows"',
+                        'Sec-Fetch-Dest': 'empty',
+                        'Sec-Fetch-Mode': 'cors',
+                        'Sec-Fetch-Site': 'cross-site',
+                    },
+                });
+                return response.body;
+            } catch (err) {
+                if (retryCount < 2) {
+                    log.warning(`Retry ${retryCount + 1} for page ${page}: ${err.message}`);
+                    await new Promise(r => setTimeout(r, 500));
+                    return fetchSearchResults(searchQuery, page, retryCount + 1);
+                }
+                throw err;
             }
-
-            const response = await gotScraping(options);
-            return response.body;
         }
 
         function cleanImageUrl(imageUrl) {
             if (!imageUrl) return null;
-            // Ensure URL starts with https
             let url = imageUrl.startsWith('//') ? `https:${imageUrl}` : imageUrl;
             if (!url.startsWith('http')) url = `https:${url}`;
-
-            // Remove query parameters to get clean .jpg URL
             try {
                 const parsed = new URL(url);
                 return `${parsed.origin}${parsed.pathname}`;
@@ -95,33 +108,18 @@ async function main() {
         function parseProduct(item) {
             const data = item.data || {};
 
-            // Extract price
             let price = null;
             let original_price = null;
-            if (data.price !== undefined) {
+            if (data.price !== undefined && data.price !== null) {
                 price = `$${parseFloat(data.price).toFixed(2)}`;
             }
-            if (data.compareAtPrice && parseFloat(data.compareAtPrice) > parseFloat(data.price)) {
+            if (data.compareAtPrice && parseFloat(data.compareAtPrice) > parseFloat(data.price || 0)) {
                 original_price = `$${parseFloat(data.compareAtPrice).toFixed(2)}`;
             }
 
-            // Extract and clean image URL
             const image_url = cleanImageUrl(data.image_url);
-
-            // Build product URL
             const handle = data.url;
             const url = handle ? `https://shophouzz.com${handle.startsWith('/') ? '' : '/'}${handle}` : null;
-
-            // Extract rating and review count from API
-            const rating = data.rating ? parseFloat(data.rating) : null;
-            const review_count = data.rating_count ? parseInt(data.rating_count, 10) : null;
-
-            // Extract SKU (using barcode or id)
-            const sku = data.barcode || data.houzz_product_id || data.id || null;
-
-            // Extract product type and specifications
-            const product_type = data.style || null;
-            const specifications = data.materials || null;
 
             return {
                 title: item.value || null,
@@ -129,13 +127,13 @@ async function main() {
                 price,
                 original_price,
                 image_url,
-                rating,
-                review_count,
-                description: null, // API doesn't provide full description
-                specifications,
+                rating: data.rating !== undefined ? parseFloat(data.rating) : null,
+                review_count: data.rating_count !== undefined ? parseInt(data.rating_count, 10) : null,
+                description: null,
+                specifications: data.materials || null,
                 url,
-                sku,
-                product_type,
+                sku: data.barcode || data.houzz_product_id || data.id || null,
+                product_type: data.style || null,
             };
         }
 
@@ -145,9 +143,8 @@ async function main() {
 
         let currentPage = 1;
         let totalResults = 0;
-        let hasMorePages = true;
 
-        while (hasMorePages && saved < RESULTS_WANTED && currentPage <= MAX_PAGES) {
+        while (saved < RESULTS_WANTED && currentPage <= MAX_PAGES) {
             try {
                 log.info(`📄 Fetching page ${currentPage}...`);
                 const data = await fetchSearchResults(searchQuery, currentPage);
@@ -161,7 +158,7 @@ async function main() {
                 totalResults = data.response.total_num_results || totalResults;
                 const numPages = Math.ceil(totalResults / RESULTS_PER_PAGE);
 
-                log.info(`📦 Page ${currentPage}/${numPages} → Found ${results.length} products (Total available: ${totalResults})`);
+                log.info(`📦 Page ${currentPage}/${numPages} → Found ${results.length} products`);
 
                 for (const item of results) {
                     if (saved >= RESULTS_WANTED) break;
@@ -175,11 +172,10 @@ async function main() {
                     await pushBatch();
                 }
 
-                hasMorePages = currentPage < numPages;
                 currentPage++;
             } catch (err) {
                 log.error(`❌ Error on page ${currentPage}: ${err.message}`);
-                currentPage++;
+                break;
             }
         }
 

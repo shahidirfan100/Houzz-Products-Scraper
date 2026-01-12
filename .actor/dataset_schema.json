@@ -9,10 +9,13 @@
           "title",
           "brand",
           "price",
+          "original_price",
           "rating",
           "review_count",
           "sku",
           "product_type",
+          "specifications",
+          "image_url",
           "url"
         ]
       },
@@ -31,6 +34,10 @@
             "label": "Price",
             "format": "text"
           },
+          "original_price": {
+            "label": "Original Price",
+            "format": "text"
+          },
           "rating": {
             "label": "Rating",
             "format": "text"
@@ -38,6 +45,22 @@
           "review_count": {
             "label": "Reviews",
             "format": "text"
+          },
+          "sku": {
+            "label": "SKU",
+            "format": "text"
+          },
+          "product_type": {
+            "label": "Product Type",
+            "format": "text"
+          },
+          "specifications": {
+            "label": "Specifications",
+            "format": "text"
+          },
+          "image_url": {
+            "label": "Image",
+            "format": "link"
           },
           "url": {
             "label": "Product URL",

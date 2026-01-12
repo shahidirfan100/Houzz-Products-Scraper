@@ -1,6 +1,6 @@
 {
   "title": "Houzz Products Scraper",
-  "description": "Fast Houzz product scraper using Constructor.io API. Extracts titles, prices, ratings, reviews, images, and more.",
+  "description": "Ultra-fast Houzz product scraper using Constructor.io API. Extracts titles, prices, ratings, reviews, images, and more.",
   "type": "object",
   "schemaVersion": 1,
   "properties": {
@@ -15,7 +15,7 @@
     "results_wanted": {
       "title": "📊 Maximum Products",
       "type": "integer",
-      "description": "Maximum number of products to collect. Leave empty or set to a high number to collect all available products.",
+      "description": "Maximum number of products to collect.",
       "minimum": 1,
       "default": 20,
       "editor": "number"
@@ -23,7 +23,7 @@
     "max_pages": {
       "title": "📑 Maximum Pages",
       "type": "integer",
-      "description": "Safety limit on the number of search result pages to visit.",
+      "description": "Safety limit on the number of API pages to fetch.",
       "minimum": 1,
       "editor": "number",
       "default": 20
@@ -31,13 +31,10 @@
     "proxyConfiguration": {
       "title": "🌐 Proxy Configuration",
       "type": "object",
-      "description": "Use Apify Proxy to avoid blocking. Residential proxies are recommended for best results.",
+      "description": "Proxy settings. Datacenter proxies are used by default for speed.",
       "editor": "proxy",
       "default": {
-        "useApifyProxy": true,
-        "apifyProxyGroups": [
-          "RESIDENTIAL"
-        ]
+        "useApifyProxy": true
       }
     }
   },
